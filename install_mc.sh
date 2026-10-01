@@ -283,7 +283,7 @@ download_nukkit() {
     step "正在下载 Nukkit (基岩版服务端)..."
     local url="https://repo.opencollab.dev/api/maven/latest/file/maven-snapshots/cn/nukkit/nukkit/1.0-SNAPSHOT?extension=jar"
     wget -O nukkit.jar "$url" || { error "下载失败"; exit 1; }
-    verify_jar server.jar || exit 1
+    verify_jar nukkit.jar || exit 1
 }
 
 # ---------- 生成配置文件 ----------
