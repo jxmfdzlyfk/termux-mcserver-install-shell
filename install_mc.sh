@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #============================================================
 # Minecraft 服务端一键安装脚本 (Termux 专用)
-# 版本: v1.1.0
+# 版本: v1.2.0
 # 更新日期: 2026-09-25
 # 支持: Paper / Fabric / Vanilla / Nukkit
 # 用法: bash install_mc.sh
@@ -115,7 +115,7 @@ show_menu() {
     clear
     title "=========================================="
     title "   Minecraft 服务端一键安装脚本 (Termux)"
-    title "   v1.1.0"
+    title "   v1.2.0"
     title "=========================================="
     echo ""
     echo "  [1] Paper    - 高性能插件服务端 (推荐)"
