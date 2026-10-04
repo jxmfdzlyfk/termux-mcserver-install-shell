@@ -5,6 +5,11 @@
 ![Version](https://img.shields.io/badge/version-v1.4.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+
+## ⚠️ 安全警告
+
+请勿在服务器目录下存放任何私钥或密钥文件！本脚本不会上传任何数据，但通过 git 拉取代码时请务必确认 .gitignore 配置正确。（要问我是怎么知道的？上一个仓库不小心把私钥上传上去了）
+
 ## ✨ 特性
 
 - 支持 **Paper / Fabric / Vanilla / Nukkit** 四种服务端
