@@ -1,16 +1,17 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #============================================================
 # Minecraft 服务端一键安装脚本 (Termux 专用)
-# 版本: v1.3.1
+# 版本: v1.3.2
 # 更新日期: 2026-10-04
 # 支持: Paper / Fabric / Vanilla / Nukkit
 # 用法: bash install_mc.sh
+#        bash install_mc.sh --check   # 自检模式
 #============================================================
 
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="v1.3.1"
+SCRIPT_VERSION="v1.3.2"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -57,7 +58,6 @@ install_deps() {
     fi
 }
 
-# ---------- 检测磁盘空间 ----------
 check_disk_space() {
     local target_dir="${1:-$HOME}"
     local avail_mb
@@ -132,6 +132,87 @@ verify_jar() {
     return 0
 }
 
+# ---------- 自检模式 ----------
+run_check() {
+    echo ""
+    title "=========================================="
+    title "   环境自检模式"
+    title "=========================================="
+    echo ""
+
+    local all_ok=true
+
+    # 1. 检查 Java 17
+    if [ -f "$PREFIX/lib/jvm/java-17-openjdk/bin/java" ]; then
+        local j17_ver
+        j17_ver=$("$PREFIX/lib/jvm/java-17-openjdk/bin/java" -version 2>&1 | head -1 | cut -d'"' -f2)
+        info "✓ Java 17 已安装: $j17_ver"
+    else
+        error "✗ Java 17 未安装"
+        all_ok=false
+    fi
+
+    # 2. 检查 Java 21
+    if [ -f "$PREFIX/lib/jvm/java-21-openjdk/bin/java" ]; then
+        local j21_ver
+        j21_ver=$("$PREFIX/lib/jvm/java-21-openjdk/bin/java" -version 2>&1 | head -1 | cut -d'"' -f2)
+        info "✓ Java 21 已安装: $j21_ver"
+    else
+        error "✗ Java 21 未安装"
+        all_ok=false
+    fi
+
+    # 3. 检查依赖
+    for cmd in wget curl jq file tar; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            info "✓ 命令可用: $cmd"
+        else
+            error "✗ 命令缺失: $cmd"
+            all_ok=false
+        fi
+    done
+
+    # 4. 检查磁盘空间
+    local avail_mb
+    avail_mb=$(df -m "$HOME" 2>/dev/null | awk 'NR==2{print $4}')
+    if [ "${avail_mb:-0}" -ge 1024 ]; then
+        info "✓ 可用空间: ${avail_mb}MB"
+    else
+        warn "⚠ 可用空间偏低: ${avail_mb}MB"
+    fi
+
+    # 5. 检查内存
+    if [ -r /proc/meminfo ]; then
+        local mem_avail
+        mem_avail=$(($(awk '/^MemAvailable:/{print $2}' /proc/meminfo) / 1024))
+        info "✓ 可用内存: ${mem_avail}MB"
+    fi
+
+    # 6. 检查已安装的服务器
+    echo ""
+    local servers
+    servers=$(find "$HOME" -maxdepth 1 -type d -name "mcserver_*" 2>/dev/null | sort)
+    if [ -n "$servers" ]; then
+        info "已安装的服务器:"
+        while IFS= read -r d; do
+            echo "    - $(basename "$d")"
+        done <<< "$servers"
+    else
+        info "暂无已安装的服务器"
+    fi
+
+    echo ""
+    title "=========================================="
+    if [ "$all_ok" = true ]; then
+        echo -e "  ${GREEN}${BOLD}✓ 环境检查通过，可以正常使用！${NC}"
+    else
+        echo -e "  ${RED}${BOLD}✗ 存在缺失项，请安装依赖后重试${NC}"
+        echo -e "    运行: ${GREEN}pkg install wget curl jq openjdk-17 openjdk-21 file tar${NC}"
+    fi
+    title "=========================================="
+    echo ""
+}
+
 show_menu() {
     clear
     title "=========================================="
@@ -144,6 +225,7 @@ show_menu() {
     echo "  [3] Vanilla  - Mojang 原版服务端"
     echo "  [4] Nukkit   - 基岩版服务端"
     echo "  [5] 更新现有服务器"
+    echo "  [6] 环境自检"
     echo "  [0] 退出"
     echo ""
     title "=========================================="
@@ -153,7 +235,7 @@ select_type() {
     while true; do
         show_menu
         set +e
-        read -p "请选择服务端类型 [0-5]: " TYPE
+        read -p "请选择服务端类型 [0-6]: " TYPE
         set -e
         case "${TYPE:-}" in
             1) SERVER_TYPE="paper";   SERVER_NAME="Paper";   break ;;
@@ -161,6 +243,7 @@ select_type() {
             3) SERVER_TYPE="vanilla"; SERVER_NAME="Vanilla"; break ;;
             4) SERVER_TYPE="nukkit";  SERVER_NAME="Nukkit";  break ;;
             5) update_server; exit 0 ;;
+            6) run_check; exit 0 ;;
             0) info "已退出安装"; exit 0 ;;
             *) warn "无效选项" ; sleep 1 ;;
         esac
@@ -289,11 +372,30 @@ download_vanilla() {
     verify_jar server.jar || return 1
 }
 
+# ---------- 下载 Nukkit（含 fallback） ----------
 download_nukkit() {
     step "正在下载 Nukkit (基岩版服务端)..."
-    local url="https://repo.opencollab.dev/maven-snapshots/cn/nukkit/nukkit/1.0-SNAPSHOT/nukkit-1.0-20260821.003151-1245.jar"
-    wget -O nukkit.jar "$url" || { error "下载失败"; return 1; }
-    verify_jar nukkit.jar || return 1
+
+    # 主 URL：固定版本（稳定）
+    local primary_url="https://repo.opencollab.dev/maven-snapshots/cn/nukkit/nukkit/1.0-SNAPSHOT/nukkit-1.0-20260821.003151-1245.jar"
+    # 备用 URL：API 获取最新版本
+    local fallback_url="https://repo.opencollab.dev/api/maven/latest/file/maven-snapshots/cn/nukkit/nukkit/1.0-SNAPSHOT?extension=jar"
+
+    info "尝试主下载链接..."
+    if wget -O nukkit.jar "$primary_url" 2>/dev/null && verify_jar nukkit.jar; then
+        return 0
+    fi
+
+    warn "主链接失败，尝试备用 API 链接..."
+    rm -f nukkit.jar
+    if wget -O nukkit.jar "$fallback_url" 2>/dev/null && verify_jar nukkit.jar; then
+        info "已使用备用链接下载成功"
+        return 0
+    fi
+
+    error "两个下载链接均失败，请稍后重试"
+    rm -f nukkit.jar
+    return 1
 }
 
 generate_config() {
@@ -320,7 +422,6 @@ EOF
     fi
 }
 
-# ---------- 创建启动脚本（内置自动备份） ----------
 create_start_script() {
     step "创建启动脚本（含自动备份世界功能）..."
 
@@ -329,7 +430,13 @@ create_start_script() {
 #!/data/data/com.termux/files/usr/bin/bash
 cd "\$(dirname "\$0")"
 
-# ---------- 自动备份世界 ----------
+# 支持 --check 参数：只检查环境，不启动
+if [ "\${1:-}" = "--check" ]; then
+    echo "Java 路径: java"
+    java -version 2>&1 || { echo "Java 不可用"; exit 1; }
+    exit 0
+fi
+
 backup_world() {
     [ ! -d "worlds" ] && return 0
     local backup_dir="./backups"
@@ -342,8 +449,11 @@ backup_world() {
     fi
     local ts=\$(date +%Y%m%d_%H%M%S)
     echo "[备份] 正在备份世界到 backups/worlds_\${ts}.tar.gz ..."
+    echo "[备份] 如果世界较大，可能需要几十秒，请耐心等待..."
+    local start_ts=\$(date +%s)
     if tar -czf "\$backup_dir/worlds_\${ts}.tar.gz" worlds 2>/dev/null; then
-        echo "[备份] 完成"
+        local end_ts=\$(date +%s)
+        echo "[备份] 完成，耗时 \$((end_ts - start_ts)) 秒"
         ls -1t "\$backup_dir"/worlds_*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
     else
         echo "[备份] 失败，继续启动"
@@ -359,7 +469,14 @@ EOF
 #!/data/data/com.termux/files/usr/bin/bash
 cd "\$(dirname "\$0")"
 
-# ---------- 自动备份世界 ----------
+# 支持 --check 参数：只检查环境，不启动
+if [ "\${1:-}" = "--check" ]; then
+    echo "Java 路径: $JAVA_BIN"
+    "$JAVA_BIN" -version 2>&1 || { echo "Java 不可用"; exit 1; }
+    [ -f server.jar ] && echo "server.jar: 已存在 (\$(du -h server.jar | cut -f1))" || echo "server.jar: 缺失"
+    exit 0
+fi
+
 backup_world() {
     [ ! -d "world" ] && return 0
     local backup_dir="./backups"
@@ -372,8 +489,11 @@ backup_world() {
     fi
     local ts=\$(date +%Y%m%d_%H%M%S)
     echo "[备份] 正在备份世界到 backups/world_\${ts}.tar.gz ..."
+    echo "[备份] 如果世界较大，可能需要几十秒，请耐心等待..."
+    local start_ts=\$(date +%s)
     if tar -czf "\$backup_dir/world_\${ts}.tar.gz" world 2>/dev/null; then
-        echo "[备份] 完成，仅保留最近 3 份"
+        local end_ts=\$(date +%s)
+        echo "[备份] 完成，耗时 \$((end_ts - start_ts)) 秒，仅保留最近 3 份"
         ls -1t "\$backup_dir"/world_*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
     else
         echo "[备份] 失败，继续启动"
@@ -399,7 +519,6 @@ EOF
     info "启动脚本已生成: ./start.sh"
 }
 
-# ---------- 一键更新现有服务器 ----------
 update_server() {
     step "扫描已安装的服务器..."
 
@@ -432,7 +551,6 @@ update_server() {
         error "无效选择"; return 1
     fi
 
-    # 用 pushd 保存原目录，方便最后 popd 回来
     pushd "${dirs[$((choice-1))]}" >/dev/null
     local target="$PWD"
 
@@ -442,7 +560,6 @@ update_server() {
     echo -e "  ${YELLOW}替换:${NC} server.jar (或 nukkit.jar) + start.sh"
     echo ""
 
-    # 从目录名推断类型和旧版本: mcserver_paper_1.21.1
     local dir_name
     dir_name=$(basename "$target")
     SERVER_TYPE=$(echo "$dir_name" | cut -d_ -f2)
@@ -457,7 +574,6 @@ update_server() {
 
     info "识别到: 类型=$SERVER_TYPE, 当前版本=$old_version"
 
-    # 让用户确认新版本（默认保持当前版本）
     echo ""
     echo "是否需要跨版本更新？"
     echo "  - 直接回车 = 保持版本 $old_version，只更新到最新构建"
@@ -473,14 +589,12 @@ update_server() {
         return 1
     fi
 
-    # 如果是跨版本更新，需要重新计算 Java 和 GC 参数
     if [ "$MC_VERSION" != "$old_version" ]; then
         info "跨版本更新：$old_version → $MC_VERSION"
         select_java
         detect_memory
         detect_cpu
     else
-        # 同版本更新，仅重新检测内存和 CPU（用户手机可能变了）
         if [ "$SERVER_TYPE" = "nukkit" ]; then
             JAVA_BIN="java"
         else
@@ -499,7 +613,6 @@ update_server() {
         return 0
     fi
 
-    # 备份旧 jar
     local jar_file="server.jar"
     [ "$SERVER_TYPE" = "nukkit" ] && jar_file="nukkit.jar"
 
@@ -509,7 +622,6 @@ update_server() {
         info "旧版已备份: $backup"
     fi
 
-    # 重新下载
     case "$SERVER_TYPE" in
         paper)   download_paper ;;
         fabric)  download_fabric ;;
@@ -518,19 +630,30 @@ update_server() {
         *) error "未知类型: $SERVER_TYPE"; popd >/dev/null; return 1 ;;
     esac
 
-    # 如果版本变了，目录名也跟着改
+    # 版本变化时重命名目录（加 sleep + 错误处理，防止文件被占用）
     if [ "$MC_VERSION" != "$old_version" ]; then
         local new_dir="$HOME/mcserver_${SERVER_TYPE}_${MC_VERSION}"
         if [ "$new_dir" != "$target" ]; then
+            info "准备重命名目录: $(basename "$target") → $(basename "$new_dir")"
+            echo "等待 1 秒，确保所有文件句柄已释放..."
+            sleep 1
+
             popd >/dev/null
-            mv "$target" "$new_dir"
-            pushd "$new_dir" >/dev/null
-            SERVER_DIR="$new_dir"
-            info "目录已重命名为: $new_dir"
+
+            if mv "$target" "$new_dir" 2>/dev/null; then
+                pushd "$new_dir" >/dev/null
+                SERVER_DIR="$new_dir"
+                info "目录已重命名为: $new_dir"
+            else
+                error "目录重命名失败（可能文件被占用）"
+                warn "将继续在原目录 $target 中更新"
+                pushd "$target" >/dev/null
+                SERVER_DIR="$target"
+            fi
         fi
     fi
 
-    # 关键修复：重新生成 start.sh（因为 Java 版本、内存、GC 参数可能已变）
+    # 关键：重新生成 start.sh（Java 版本、内存、GC 参数可能已变）
     create_start_script
 
     info "${GREEN}更新完成！世界数据已保留，start.sh 已同步更新${NC}"
@@ -542,7 +665,6 @@ update_server() {
     popd >/dev/null
 }
 
-# ---------- 完成提示 ----------
 show_finish() {
     echo ""
     title "=========================================="
@@ -558,9 +680,13 @@ show_finish() {
     echo "     2. ${RED}不要直接关闭 Termux 窗口${NC}，否则可能丢失存档"
     echo "     3. 手机请关闭省电模式，允许 Termux 后台运行"
     echo "     4. 每次启动会自动备份世界到 backups/（保留最近 3 份）"
+    echo "     5. 首次启动若世界较大，备份可能需要几十秒"
     echo ""
     echo -e "  ${BLUE}🚀 启动服务器:${NC}"
     echo "     cd $SERVER_DIR && ./start.sh"
+    echo ""
+    echo -e "  ${BLUE}🔍 只检查环境不启动:${NC}"
+    echo "     cd $SERVER_DIR && ./start.sh --check"
     echo ""
     echo -e "  ${BLUE}🛑 停止服务器:${NC}"
     echo "     在控制台输入 stop 并回车"
@@ -577,8 +703,14 @@ show_finish() {
     title "=========================================="
 }
 
-# ---------- 主流程 ----------
 main() {
+    # 支持 --check 参数
+    if [ "${1:-}" = "--check" ]; then
+        check_termux
+        run_check
+        exit 0
+    fi
+
     check_termux
     check_disk_space "$HOME" || exit 1
     install_deps
