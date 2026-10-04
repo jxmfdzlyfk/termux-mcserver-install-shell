@@ -2,7 +2,7 @@
 
 在 Android 手机上用 Termux 一键搭建 Minecraft Java 版 / 基岩版服务器。
 
-![Version](https://img.shields.io/badge/version-v1.3.2-blue)
+![Version](https://img.shields.io/badge/version-v1.4.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## ✨ 特性
@@ -108,7 +108,14 @@ cd ~/mcserver_paper_1.21.1
 
 ## 📋 更新日志
 
-
+### v1.4.0 (2026-10-04)
+- ✨ 新增自动定时重启功能（默认每 6 小时）
+- ✨ 重启前 5 分钟在游戏内广播倒计时
+- ✨ 通过 SIGINT 触发优雅关闭，世界数据安全保存
+- ✨ 崩溃检测：60 秒内崩溃 3 次自动停止重启
+- ✨ 支持通过环境变量 RESTART_HOURS 配置间隔
+- ✨ 支持 .stop_restart 文件永久停止自动重启
+- ♻️ 使用 FIFO 实现终端输入转发，同时支持玩家警告广播
 ### v1.3.2 (2026-10-04)
 - 🐛 修复目录重命名时可能因文件占用失败的问题（加 sleep 1 + 错误回退）
 - ✨ 启动脚本备份时显示耗时提示和实际耗时
