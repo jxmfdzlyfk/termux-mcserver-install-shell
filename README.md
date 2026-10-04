@@ -2,7 +2,7 @@
 
 在 Android 手机上用 Termux 一键搭建 Minecraft Java 版 / 基岩版服务器。
 
-![Version](https://img.shields.io/badge/version-v1.3.1-blue)
+![Version](https://img.shields.io/badge/version-v1.3.2-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## ✨ 特性
