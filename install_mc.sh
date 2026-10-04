@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #============================================================
 # Minecraft 服务端一键安装脚本 (Termux 专用)
-# 版本: v1.3.2
+# 版本: v1.4.0
 # 更新日期: 2026-10-04
 # 支持: Paper / Fabric / Vanilla / Nukkit
 # 用法: bash install_mc.sh
@@ -11,7 +11,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="v1.3.2"
+SCRIPT_VERSION="v1.4.0"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -66,10 +66,9 @@ check_disk_space() {
 
     if [ "$avail_mb" -lt 1024 ]; then
         error "可用存储空间不足 1GB（当前 ${avail_mb}MB）"
-        warn "请清理空间后重试"
         return 1
     elif [ "$avail_mb" -lt 2048 ]; then
-        warn "可用存储空间较低（${avail_mb}MB），建议清理"
+        warn "可用存储空间较低（${avail_mb}MB）"
     else
         info "可用存储空间: ${avail_mb}MB"
     fi
@@ -132,7 +131,6 @@ verify_jar() {
     return 0
 }
 
-# ---------- 自检模式 ----------
 run_check() {
     echo ""
     title "=========================================="
@@ -142,27 +140,24 @@ run_check() {
 
     local all_ok=true
 
-    # 1. 检查 Java 17
     if [ -f "$PREFIX/lib/jvm/java-17-openjdk/bin/java" ]; then
         local j17_ver
         j17_ver=$("$PREFIX/lib/jvm/java-17-openjdk/bin/java" -version 2>&1 | head -1 | cut -d'"' -f2)
-        info "✓ Java 17 已安装: $j17_ver"
+        info "✓ Java 17: $j17_ver"
     else
         error "✗ Java 17 未安装"
         all_ok=false
     fi
 
-    # 2. 检查 Java 21
     if [ -f "$PREFIX/lib/jvm/java-21-openjdk/bin/java" ]; then
         local j21_ver
         j21_ver=$("$PREFIX/lib/jvm/java-21-openjdk/bin/java" -version 2>&1 | head -1 | cut -d'"' -f2)
-        info "✓ Java 21 已安装: $j21_ver"
+        info "✓ Java 21: $j21_ver"
     else
         error "✗ Java 21 未安装"
         all_ok=false
     fi
 
-    # 3. 检查依赖
     for cmd in wget curl jq file tar; do
         if command -v "$cmd" >/dev/null 2>&1; then
             info "✓ 命令可用: $cmd"
@@ -172,7 +167,6 @@ run_check() {
         fi
     done
 
-    # 4. 检查磁盘空间
     local avail_mb
     avail_mb=$(df -m "$HOME" 2>/dev/null | awk 'NR==2{print $4}')
     if [ "${avail_mb:-0}" -ge 1024 ]; then
@@ -181,14 +175,12 @@ run_check() {
         warn "⚠ 可用空间偏低: ${avail_mb}MB"
     fi
 
-    # 5. 检查内存
     if [ -r /proc/meminfo ]; then
         local mem_avail
         mem_avail=$(($(awk '/^MemAvailable:/{print $2}' /proc/meminfo) / 1024))
         info "✓ 可用内存: ${mem_avail}MB"
     fi
 
-    # 6. 检查已安装的服务器
     echo ""
     local servers
     servers=$(find "$HOME" -maxdepth 1 -type d -name "mcserver_*" 2>/dev/null | sort)
@@ -204,10 +196,9 @@ run_check() {
     echo ""
     title "=========================================="
     if [ "$all_ok" = true ]; then
-        echo -e "  ${GREEN}${BOLD}✓ 环境检查通过，可以正常使用！${NC}"
+        echo -e "  ${GREEN}${BOLD}✓ 环境检查通过${NC}"
     else
-        echo -e "  ${RED}${BOLD}✗ 存在缺失项，请安装依赖后重试${NC}"
-        echo -e "    运行: ${GREEN}pkg install wget curl jq openjdk-17 openjdk-21 file tar${NC}"
+        echo -e "  ${RED}${BOLD}✗ 存在缺失项${NC}"
     fi
     title "=========================================="
     echo ""
@@ -372,28 +363,22 @@ download_vanilla() {
     verify_jar server.jar || return 1
 }
 
-# ---------- 下载 Nukkit（含 fallback） ----------
 download_nukkit() {
     step "正在下载 Nukkit (基岩版服务端)..."
-
-    # 主 URL：固定版本（稳定）
     local primary_url="https://repo.opencollab.dev/maven-snapshots/cn/nukkit/nukkit/1.0-SNAPSHOT/nukkit-1.0-20260821.003151-1245.jar"
-    # 备用 URL：API 获取最新版本
     local fallback_url="https://repo.opencollab.dev/api/maven/latest/file/maven-snapshots/cn/nukkit/nukkit/1.0-SNAPSHOT?extension=jar"
 
     info "尝试主下载链接..."
     if wget -O nukkit.jar "$primary_url" 2>/dev/null && verify_jar nukkit.jar; then
         return 0
     fi
-
     warn "主链接失败，尝试备用 API 链接..."
     rm -f nukkit.jar
     if wget -O nukkit.jar "$fallback_url" 2>/dev/null && verify_jar nukkit.jar; then
         info "已使用备用链接下载成功"
         return 0
     fi
-
-    error "两个下载链接均失败，请稍后重试"
+    error "两个下载链接均失败"
     rm -f nukkit.jar
     return 1
 }
@@ -422,61 +407,159 @@ EOF
     fi
 }
 
+# ============================================================
+# 创建启动脚本（v1.4.0 新版：含自动定时重启 + 优雅关闭）
+# ============================================================
 create_start_script() {
-    step "创建启动脚本（含自动备份世界功能）..."
+    step "创建启动脚本（含自动定时重启功能）..."
 
     if [ "$SERVER_TYPE" = "nukkit" ]; then
-        cat > start.sh <<EOF
+        cat > start.sh <<'NUKKIT_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
-cd "\$(dirname "\$0")"
+cd "$(dirname "$0")"
 
-# 支持 --check 参数：只检查环境，不启动
-if [ "\${1:-}" = "--check" ]; then
-    echo "Java 路径: java"
+# ============ 配置 ============
+RESTART_HOURS="${RESTART_HOURS:-6}"   # 自动重启间隔（小时），0 = 禁用
+
+# --check 模式
+if [ "${1:-}" = "--check" ]; then
+    echo "Java: java"
     java -version 2>&1 || { echo "Java 不可用"; exit 1; }
+    [ -f nukkit.jar ] && echo "nukkit.jar: 存在 ($(du -h nukkit.jar | cut -f1))" || echo "nukkit.jar: 缺失"
     exit 0
 fi
 
+# ============ 世界备份 ============
 backup_world() {
     [ ! -d "worlds" ] && return 0
     local backup_dir="./backups"
-    mkdir -p "\$backup_dir"
+    mkdir -p "$backup_dir"
     local avail_mb
-    avail_mb=\$(df -m . 2>/dev/null | awk 'NR==2{print \$4}')
-    if [ "\${avail_mb:-0}" -lt 2048 ]; then
-        echo "[备份] 剩余空间不足 2GB，跳过备份"
+    avail_mb=$(df -m . 2>/dev/null | awk 'NR==2{print $4}')
+    if [ "${avail_mb:-0}" -lt 2048 ]; then
+        echo "[备份] 空间不足 2GB，跳过"
         return 0
     fi
-    local ts=\$(date +%Y%m%d_%H%M%S)
-    echo "[备份] 正在备份世界到 backups/worlds_\${ts}.tar.gz ..."
-    echo "[备份] 如果世界较大，可能需要几十秒，请耐心等待..."
-    local start_ts=\$(date +%s)
-    if tar -czf "\$backup_dir/worlds_\${ts}.tar.gz" worlds 2>/dev/null; then
-        local end_ts=\$(date +%s)
-        echo "[备份] 完成，耗时 \$((end_ts - start_ts)) 秒"
-        ls -1t "\$backup_dir"/worlds_*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
-    else
-        echo "[备份] 失败，继续启动"
+    local ts=$(date +%Y%m%d_%H%M%S)
+    echo "[备份] 备份世界中（大世界需等待）..."
+    local start_ts=$(date +%s)
+    if tar -czf "$backup_dir/worlds_${ts}.tar.gz" worlds 2>/dev/null; then
+        local end_ts=$(date +%s)
+        echo "[备份] 完成，耗时 $((end_ts - start_ts)) 秒"
+        ls -1t "$backup_dir"/worlds_*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
     fi
 }
 backup_world
 
-termux-wake-lock 2>/dev/null || true
-exec java -Xms${JAVA_XMS} -Xmx${JAVA_XMX} -jar nukkit.jar
-EOF
+# ============ 无自动重启 ============
+if [ "$RESTART_HOURS" -eq 0 ]; then
+    echo "[配置] 自动重启已禁用"
+    termux-wake-lock 2>/dev/null || true
+    exec java -Xms${JAVA_XMS} -Xmx${JAVA_XMX} -jar nukkit.jar
+fi
+
+# ============ 自动重启模式 ============
+echo "[配置] 自动重启: 每 $RESTART_HOURS 小时"
+echo "[提示] 完全停止: 创建 .stop_restart 文件后按 Ctrl+C"
+echo ""
+
+FIFO="$PWD/.server_fifo"
+[ -p "$FIFO" ] || mkfifo "$FIFO"
+
+SHUTDOWN_REQUESTED=0
+trap 'SHUTDOWN_REQUESTED=1' INT
+cleanup() { rm -f "$FIFO" 2>/dev/null || true; }
+trap cleanup EXIT
+
+exec 9> "$FIFO"
+
+# 转发终端输入
+( while IFS= read -r line; do echo "$line" >&9 2>/dev/null || break; done ) &
+STDIN_FORWARDER=$!
+
+# 主循环
+RESTART_COUNT=0
+LAST_START_TIME=0
+CRASH_COUNT=0
+
+while [ "$SHUTDOWN_REQUESTED" -eq 0 ]; do
+    NOW=$(date +%s)
+    if [ $((NOW - LAST_START_TIME)) -lt 60 ]; then
+        CRASH_COUNT=$((CRASH_COUNT + 1))
+    else
+        CRASH_COUNT=0
+    fi
+    LAST_START_TIME=$NOW
+
+    if [ "$CRASH_COUNT" -ge 3 ]; then
+        echo "[错误] 60 秒内崩溃 3 次，停止自动重启"
+        break
+    fi
+
+    RESTART_COUNT=$((RESTART_COUNT + 1))
+    echo ""
+    echo "==========================================="
+    echo "[启动] $(date '+%Y-%m-%d %H:%M:%S')  第 $RESTART_COUNT 次"
+    echo "==========================================="
+
+    termux-wake-lock 2>/dev/null || true
+
+    # 后台定时器
+    (
+        TOTAL=$((RESTART_HOURS * 3600))
+        sleep $((TOTAL - 300))
+        for i in 5 4 3 2 1; do
+            echo "say §e[服务器] §c$i 分钟后自动重启" >&9 2>/dev/null
+            sleep 60
+        done
+        echo "say §e[服务器] §c10 秒后自动重启" >&9 2>/dev/null
+        sleep 10
+        echo "stop" >&9 2>/dev/null
+    ) &
+    TIMER=$!
+
+    java -Xms${JAVA_XMS} -Xmx${JAVA_XMX} -jar nukkit.jar < "$FIFO"
+
+    kill "$TIMER" 2>/dev/null
+    wait "$TIMER" 2>/dev/null
+
+    echo "[停止] 服务器已退出"
+
+    if [ -f ".stop_restart" ]; then
+        rm -f ".stop_restart"
+        echo "[退出] 检测到 .stop_restart"
+        break
+    fi
+
+    if [ "$SHUTDOWN_REQUESTED" -eq 1 ]; then
+        echo "[退出] 收到停止信号"
+        break
+    fi
+
+    echo "[重启] 10 秒后自动重启..."
+    sleep 10
+done
+
+kill "$STDIN_FORWARDER" 2>/dev/null
+echo "[结束] 服务器已停止"
+NUKKIT_EOF
     else
         cat > start.sh <<EOF
 #!/data/data/com.termux/files/usr/bin/bash
 cd "\$(dirname "\$0")"
 
-# 支持 --check 参数：只检查环境，不启动
+# ============ 配置 ============
+RESTART_HOURS="\${RESTART_HOURS:-6}"   # 自动重启间隔（小时），0 = 禁用
+
+# --check 模式
 if [ "\${1:-}" = "--check" ]; then
-    echo "Java 路径: $JAVA_BIN"
+    echo "Java: $JAVA_BIN"
     "$JAVA_BIN" -version 2>&1 || { echo "Java 不可用"; exit 1; }
-    [ -f server.jar ] && echo "server.jar: 已存在 (\$(du -h server.jar | cut -f1))" || echo "server.jar: 缺失"
+    [ -f server.jar ] && echo "server.jar: 存在 (\$(du -h server.jar | cut -f1))" || echo "server.jar: 缺失"
     exit 0
 fi
 
+# ============ 世界备份 ============
 backup_world() {
     [ ! -d "world" ] && return 0
     local backup_dir="./backups"
@@ -484,39 +567,136 @@ backup_world() {
     local avail_mb
     avail_mb=\$(df -m . 2>/dev/null | awk 'NR==2{print \$4}')
     if [ "\${avail_mb:-0}" -lt 2048 ]; then
-        echo "[备份] 剩余空间不足 2GB，跳过备份"
+        echo "[备份] 空间不足 2GB，跳过"
         return 0
     fi
     local ts=\$(date +%Y%m%d_%H%M%S)
-    echo "[备份] 正在备份世界到 backups/world_\${ts}.tar.gz ..."
-    echo "[备份] 如果世界较大，可能需要几十秒，请耐心等待..."
+    echo "[备份] 备份世界中（大世界需等待）..."
     local start_ts=\$(date +%s)
     if tar -czf "\$backup_dir/world_\${ts}.tar.gz" world 2>/dev/null; then
         local end_ts=\$(date +%s)
-        echo "[备份] 完成，耗时 \$((end_ts - start_ts)) 秒，仅保留最近 3 份"
+        echo "[备份] 完成，耗时 \$((end_ts - start_ts)) 秒"
         ls -1t "\$backup_dir"/world_*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
-    else
-        echo "[备份] 失败，继续启动"
     fi
 }
 backup_world
 
-termux-wake-lock 2>/dev/null || true
-exec "$JAVA_BIN" -Xms${JAVA_XMS} -Xmx${JAVA_XMX} \\
-    -XX:+UseG1GC -XX:+ParallelRefProcEnabled \\
-    -XX:MaxGCPauseMillis=200 \\
-    -XX:ParallelGCThreads=${GC_THREADS} -XX:ConcGCThreads=${CONC_GC_THREADS} \\
-    -XX:+UnlockExperimentalVMOptions -XX:G1NewSizePercent=30 \\
-    -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M \\
-    -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 \\
-    -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 \\
-    -XX:G1MixedGCLiveThresholdPercent=90 -XX:SurvivorRatio=32 \\
-    -jar server.jar nogui
+# ============ 无自动重启 ============
+if [ "\$RESTART_HOURS" -eq 0 ]; then
+    echo "[配置] 自动重启已禁用"
+    termux-wake-lock 2>/dev/null || true
+    exec "$JAVA_BIN" -Xms${JAVA_XMS} -Xmx${JAVA_XMX} \\
+        -XX:+UseG1GC -XX:+ParallelRefProcEnabled \\
+        -XX:MaxGCPauseMillis=200 \\
+        -XX:ParallelGCThreads=${GC_THREADS} -XX:ConcGCThreads=${CONC_GC_THREADS} \\
+        -XX:+UnlockExperimentalVMOptions -XX:G1NewSizePercent=30 \\
+        -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M \\
+        -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 \\
+        -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 \\
+        -XX:G1MixedGCLiveThresholdPercent=90 -XX:SurvivorRatio=32 \\
+        -jar server.jar nogui
+fi
+
+# ============ 自动重启模式 ============
+echo "[配置] 自动重启: 每 \$RESTART_HOURS 小时"
+echo "[提示] 完全停止: 创建 .stop_restart 文件后按 Ctrl+C"
+echo ""
+
+FIFO="\$PWD/.server_fifo"
+[ -p "\$FIFO" ] || mkfifo "\$FIFO"
+
+SHUTDOWN_REQUESTED=0
+trap 'SHUTDOWN_REQUESTED=1' INT
+cleanup() { rm -f "\$FIFO" 2>/dev/null || true; }
+trap cleanup EXIT
+
+exec 9> "\$FIFO"
+
+# 转发终端输入
+( while IFS= read -r line; do echo "\$line" >&9 2>/dev/null || break; done ) &
+STDIN_FORWARDER=\$!
+
+# 主循环
+RESTART_COUNT=0
+LAST_START_TIME=0
+CRASH_COUNT=0
+
+while [ "\$SHUTDOWN_REQUESTED" -eq 0 ]; do
+    NOW=\$(date +%s)
+    if [ \$((NOW - LAST_START_TIME)) -lt 60 ]; then
+        CRASH_COUNT=\$((CRASH_COUNT + 1))
+    else
+        CRASH_COUNT=0
+    fi
+    LAST_START_TIME=\$NOW
+
+    if [ "\$CRASH_COUNT" -ge 3 ]; then
+        echo "[错误] 60 秒内崩溃 3 次，停止自动重启"
+        break
+    fi
+
+    RESTART_COUNT=\$((RESTART_COUNT + 1))
+    echo ""
+    echo "==========================================="
+    echo "[启动] \$(date '+%Y-%m-%d %H:%M:%S')  第 \$RESTART_COUNT 次"
+    echo "==========================================="
+
+    termux-wake-lock 2>/dev/null || true
+
+    # 后台定时器
+    (
+        TOTAL=\$((RESTART_HOURS * 3600))
+        sleep \$((TOTAL - 300))
+        for i in 5 4 3 2 1; do
+            echo "say §e[服务器] §c\$i 分钟后自动重启" >&9 2>/dev/null
+            sleep 60
+        done
+        echo "say §e[服务器] §c10 秒后自动重启" >&9 2>/dev/null
+        sleep 10
+        echo "stop" >&9 2>/dev/null
+    ) &
+    TIMER=\$!
+
+    "$JAVA_BIN" -Xms${JAVA_XMS} -Xmx${JAVA_XMX} \\
+        -XX:+UseG1GC -XX:+ParallelRefProcEnabled \\
+        -XX:MaxGCPauseMillis=200 \\
+        -XX:ParallelGCThreads=${GC_THREADS} -XX:ConcGCThreads=${CONC_GC_THREADS} \\
+        -XX:+UnlockExperimentalVMOptions -XX:G1NewSizePercent=30 \\
+        -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M \\
+        -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 \\
+        -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 \\
+        -XX:G1MixedGCLiveThresholdPercent=90 -XX:SurvivorRatio=32 \\
+        -jar server.jar nogui < "\$FIFO"
+
+    kill "\$TIMER" 2>/dev/null
+    wait "\$TIMER" 2>/dev/null
+
+    echo "[停止] 服务器已退出"
+
+    if [ -f ".stop_restart" ]; then
+        rm -f ".stop_restart"
+        echo "[退出] 检测到 .stop_restart"
+        break
+    fi
+
+    if [ "\$SHUTDOWN_REQUESTED" -eq 1 ]; then
+        echo "[退出] 收到停止信号"
+        break
+    fi
+
+    echo "[重启] 10 秒后自动重启..."
+    sleep 10
+done
+
+kill "\$STDIN_FORWARDER" 2>/dev/null
+echo "[结束] 服务器已停止"
 EOF
     fi
 
     chmod +x start.sh
     info "启动脚本已生成: ./start.sh"
+    info "默认自动重启间隔: 6 小时"
+    info "修改间隔: 编辑 start.sh 中的 RESTART_HOURS 变量"
 }
 
 update_server() {
@@ -556,7 +736,7 @@ update_server() {
 
     info "将更新: $target"
     echo ""
-    echo -e "  ${GREEN}保留:${NC} world/ server.properties plugins/ mods/ config/"
+    echo -e "  ${GREEN}保留:${NC} world/ server.properties plugins/ mods/ config/ backups/"
     echo -e "  ${YELLOW}替换:${NC} server.jar (或 nukkit.jar) + start.sh"
     echo ""
 
@@ -576,7 +756,7 @@ update_server() {
 
     echo ""
     echo "是否需要跨版本更新？"
-    echo "  - 直接回车 = 保持版本 $old_version，只更新到最新构建"
+    echo "  - 直接回车 = 保持版本 $old_version"
     echo "  - 或输入新版本号（如 1.21.1）"
     set +e
     read -p "新版本 [${old_version}]: " new_version
@@ -630,12 +810,11 @@ update_server() {
         *) error "未知类型: $SERVER_TYPE"; popd >/dev/null; return 1 ;;
     esac
 
-    # 版本变化时重命名目录（加 sleep + 错误处理，防止文件被占用）
     if [ "$MC_VERSION" != "$old_version" ]; then
         local new_dir="$HOME/mcserver_${SERVER_TYPE}_${MC_VERSION}"
         if [ "$new_dir" != "$target" ]; then
             info "准备重命名目录: $(basename "$target") → $(basename "$new_dir")"
-            echo "等待 1 秒，确保所有文件句柄已释放..."
+            echo "等待 1 秒，确保文件句柄已释放..."
             sleep 1
 
             popd >/dev/null
@@ -645,15 +824,14 @@ update_server() {
                 SERVER_DIR="$new_dir"
                 info "目录已重命名为: $new_dir"
             else
-                error "目录重命名失败（可能文件被占用）"
-                warn "将继续在原目录 $target 中更新"
+                error "目录重命名失败"
                 pushd "$target" >/dev/null
                 SERVER_DIR="$target"
             fi
         fi
     fi
 
-    # 关键：重新生成 start.sh（Java 版本、内存、GC 参数可能已变）
+    # 关键：重新生成 start.sh（含自动重启功能）
     create_start_script
 
     info "${GREEN}更新完成！世界数据已保留，start.sh 已同步更新${NC}"
@@ -680,16 +858,21 @@ show_finish() {
     echo "     2. ${RED}不要直接关闭 Termux 窗口${NC}，否则可能丢失存档"
     echo "     3. 手机请关闭省电模式，允许 Termux 后台运行"
     echo "     4. 每次启动会自动备份世界到 backups/（保留最近 3 份）"
-    echo "     5. 首次启动若世界较大，备份可能需要几十秒"
+    echo "     5. ${GREEN}默认每 6 小时自动重启一次${NC}，重启前 5 分钟会广播提示"
     echo ""
     echo -e "  ${BLUE}🚀 启动服务器:${NC}"
     echo "     cd $SERVER_DIR && ./start.sh"
     echo ""
+    echo -e "  ${BLUE}⏰ 修改自动重启间隔:${NC}"
+    echo "     编辑 start.sh 中的 RESTART_HOURS 变量（0 = 禁用）"
+    echo "     或运行: RESTART_HOURS=12 ./start.sh"
+    echo ""
+    echo -e "  ${BLUE}🛑 完全停止服务器:${NC}"
+    echo "     touch $SERVER_DIR/.stop_restart   # 阻止自动重启"
+    echo "     然后在控制台按 Ctrl+C"
+    echo ""
     echo -e "  ${BLUE}🔍 只检查环境不启动:${NC}"
     echo "     cd $SERVER_DIR && ./start.sh --check"
-    echo ""
-    echo -e "  ${BLUE}🛑 停止服务器:${NC}"
-    echo "     在控制台输入 stop 并回车"
     echo ""
     echo -e "  ${BLUE}📱 客户端连接:${NC}"
     if [ "$SERVER_TYPE" = "nukkit" ]; then
@@ -704,7 +887,6 @@ show_finish() {
 }
 
 main() {
-    # 支持 --check 参数
     if [ "${1:-}" = "--check" ]; then
         check_termux
         run_check
