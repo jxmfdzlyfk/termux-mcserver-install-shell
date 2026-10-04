@@ -13,7 +13,7 @@
 ## 📱 环境要求
 
 - Android 手机（建议 4GB 内存以上）
-- [Termux](https://f-droid.org/packages/com.termux/)（**必须从 F-Droid 安装**）
+- [Termux](https://f-droid.org/packages/com.termux/)（**必须从 F-Droid 安装或GitHub**）
 - 存储空间 ≥ 2GB
 
 ## 🚀 快速开始
