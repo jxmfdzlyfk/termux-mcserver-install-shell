@@ -2,19 +2,33 @@
 
 在 Android 手机上用 Termux 一键搭建 Minecraft Java 版 / 基岩版服务器。
 
+![Version](https://img.shields.io/badge/version-v1.3.0-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 ## ✨ 特性
 
 - 支持 **Paper / Fabric / Vanilla / Nukkit** 四种服务端
 - 自动匹配 Java 版本（17 / 21）
+- **一键更新现有服务器**，保留世界和配置
 - 从官方 API 动态获取下载链接，永不失效
-- 自动生成适合手机的优化配置
+- **智能内存分配**（读取 `/proc/meminfo` 实际可用内存）
+- **动态 GC 线程**（自动根据 CPU 核心数调整）
+- 下载文件自动校验，防止下载到错误页面
 - 完整的安装日志，出问题可追溯
 
 ## 📱 环境要求
 
 - Android 手机（建议 4GB 内存以上）
-- [Termux](https://github.com/Termux/termux-app)（**必须从 F-Droid 安装或GitHub**）
+- [Termux](https://f-droid.org/packages/com.termux/)（**必须从 F-Droid 安装**）
 - 存储空间 ≥ 2GB
+
+## ⚠️ 版本限制
+
+**本脚本仅支持 Minecraft 1.17.1 及以上版本。**
+
+原因：1.16.5 及更老版本需要 Java 8/11/16，而现代 Termux 环境安装 Java 8 极其困难。
+
+如需老版本，请参考 [proot-distro 方案](https://github.com/jxmfdzlyfk/termux-mcserver-install-shell/wiki)，或使用 PC 搭建。
 
 ## 🚀 快速开始
 
@@ -47,6 +61,8 @@ curl -fsSL https://raw.githubusercontent.com/jxmfdzlyfk/termux-mcserver-install-
   [2] Fabric   - 模组服务端
   [3] Vanilla  - Mojang 原版服务端
   [4] Nukkit   - 基岩版服务端
+  [5] 更新现有服务器
+  [0] 退出
 ```
 
 选择类型 → 输入版本号（如 `1.21.1`）→ 脚本自动下载和配置。
@@ -61,6 +77,13 @@ cd ~/mcserver_paper_1.21.1
 ### 停止服务器
 
 在服务器控制台输入 `stop` 并回车。
+
+### 更新服务器
+
+重新运行脚本，选择 `[5] 更新现有服务器`，脚本会：
+- 保留 `world/`、`server.properties`、`plugins/`、`mods/`
+- 自动备份旧 `server.jar`
+- 重新下载最新版本
 
 ### 客户端连接
 
@@ -79,14 +102,35 @@ cd ~/mcserver_paper_1.21.1
 ## ⚠️ 注意事项
 
 - 首次使用建议先执行 `termux-setup-storage`
-- 关闭手机省电模式，否则服务器会被系统杀掉
+- **关闭手机省电模式**，否则服务器会被系统杀掉
+- **不要直接关闭 Termux 窗口**，请在控制台输入 `stop` 后再退出
 - 安装日志保存在 `~/.mcserver_installer/`
+
+## 📋 更新日志
+
+### v1.3.0 (2026-10-04)
+- ✨ 新增一键更新服务器功能
+- ✨ 使用 `/proc/meminfo` 读取实际可用内存（更准确）
+- ✨ 动态检测 CPU 核心数，自动调整 GC 线程
+- ✨ 下载文件自动校验（防止下载到 HTML 错误页）
+- ✨ 拒绝安装 1.17.1 以下版本，避免 Java 8 兼容性问题
+- 🐛 修复变量引用未加引号的潜在问题
+- 📝 完善输出提示和错误信息
+
+### v1.1.0 (2026-09-25)
+- 加入 `set -euo pipefail` 严格模式
+- 添加版本号正则校验
+- 增加安装日志功能
+- 完善 JVM 参数
+
+### v1.0.0 (2026-09-23)
+- 首次发布
+- 支持 Paper / Fabric / Vanilla / Nukkit
 
 ## 🐛 反馈
 
-遇到问题请提交 [Issue](https://github.com/jxmfdzlyfk/termux-mcserver-install-shell/issues)。
+遇到问题请提交 [Issue](https://github.com/jxmfdzlyfk/termux-mcserver-install-shell/issues)，并附上 `~/.mcserver_installer/` 下的日志文件。
 
 ## 📜 开源协议
 
 MIT License
-
